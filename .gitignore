@@ -1,0 +1,17 @@
+# Never commit local Codex state or session transcripts
+.codex/
+**/.codex/
+*.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
