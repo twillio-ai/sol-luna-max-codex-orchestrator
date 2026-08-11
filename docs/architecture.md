@@ -4,7 +4,7 @@
 
 Keep a high-capability root model responsible for decisions while moving long implementation work and passive waiting away from that root.
 
-The default profile in this repository is:
+Default profile:
 
 - Commander: `gpt-5.6-sol`
 - Executor: `gpt-5.6-luna`
@@ -14,59 +14,43 @@ The default profile in this repository is:
 - Designer: none
 - Wait layer: local operating-system process, not an LLM
 
-This is a control-flow pattern, not a claim that these exact model names must exist forever. If OpenAI changes the model catalog, the same architecture can be applied to a premium commander and a lower-cost/high-volume executor after representative evaluation.
+This is a control-flow pattern, not a claim that these exact model names must exist forever.
 
 ## State machine
 
 ```text
-┌─────────────┐
-│ USER_REQUEST│
-└──────┬──────┘
-       │
-       ▼
-┌─────────────────────┐
-│ SOL_BOUND_DELEGATION│
-│ goal + constraints  │
-│ acceptance criteria │
-└─────────┬───────────┘
-          │
-          ▼
-┌─────────────────────┐
-│ LUNA_RUNNING        │
-│ inspect / edit/test │
-└─────────┬───────────┘
-          │
-          ▼
-┌─────────────────────┐
-│ OS_WAITING          │
-│ no LLM heartbeat   │
-└─────────┬───────────┘
-          │ terminal event
-          ▼
-┌─────────────────────┐
-│ SOL_VALIDATING      │
-└──────┬─────────┬────┘
-       │ pass    │ fail
-       ▼         ▼
-┌───────────┐  ┌──────────────────┐
-│ COMPLETE  │  │ BOUNDED_CORRECT  │
-└───────────┘  │ Sol → Luna       │
-               └────────┬─────────┘
-                        └──────→ LUNA_RUNNING
+USER_REQUEST
+     │
+     ▼
+SOL_BOUND_DELEGATION
+     │ goal + constraints + acceptance criteria
+     ▼
+LUNA_RUNNING
+     │ inspect / edit / test
+     ▼
+LOCAL_PROCESS_WAIT
+     │ no Sol/Luna heartbeat
+     │ observes new terminal JSONL event
+     ▼
+SOL_VALIDATING
+     │
+     ├─ pass ─→ COMPLETE
+     │
+     └─ fail ─→ BOUNDED_CORRECTION → LUNA_RUNNING
 ```
 
-## Why an OS watcher?
+## Why a local watcher?
 
-A long executor task has two very different kinds of work:
+A long executor task contains two different categories of work:
 
-1. **Model work** — reasoning, repository inspection, implementation, testing.
-2. **Waiting** — no useful reasoning is required until the worker changes state.
+1. **Model work** — reasoning, repository inspection, implementation, and testing.
+2. **Passive waiting** — no useful model judgment is required until executor state changes.
 
-Only the first category needs an LLM. The second can be handled by the operating system.
+Only the first category needs an LLM.
 
-The primary Windows implementation uses PowerShell and `.NET` `FileSystemWatcher` notifications to observe writes to one Codex JSONL session file. It reads only newly appended bytes and looks for a structured terminal event.
+The Windows watcher is a normal PowerShell process. It records the selected Codex JSONL session file's current byte offset, reads only newly appended bytes, parses complete JSONL records, and sleeps locally between filesystem checks. That local polling is intentionally **process-level polling, not model polling**.
 
-Expected terminal record shape:
+Expected terminal record:
 
 ```json
 {
@@ -77,13 +61,13 @@ Expected terminal record shape:
 }
 ```
 
-The watcher does not infer success from wall-clock time. It waits for a structured event.
+The watcher does not infer success from elapsed time. It exits successfully only after a structured terminal event is observed.
 
-## Important distinction: authority vs activity
+## Authority vs. activity
 
-Sol remains the root authority even when it is not actively running a model turn.
+Sol remains root authority even when it is not actively running a model turn.
 
-The OS watcher cannot:
+The local watcher cannot:
 
 - reinterpret the user goal;
 - approve a code change;
@@ -92,23 +76,21 @@ The OS watcher cannot:
 - select a fallback model;
 - decide whether production evidence is sufficient.
 
-It can only report a terminal executor event.
-
-This separation is the point of the design.
+It can only observe terminal executor state.
 
 ## Bounded delegation packet
 
-The commander should not send a giant duplicated repository dump to Luna. A normal packet should contain only:
+The commander should not send a giant duplicated repository dump to Luna. A normal packet contains:
 
 ```text
 GOAL
 - one concrete outcome
 
 KNOWN EVIDENCE
-- identifiers and already-proven facts that matter
+- only facts that materially constrain the task
 
 NON-NEGOTIABLE CONSTRAINTS
-- architecture, safety, production, permission boundaries
+- architecture, safety, production and permission boundaries
 
 ACCEPTANCE CRITERIA
 - deterministic conditions that prove completion
@@ -121,11 +103,9 @@ RETURN CONTRACT
 - blockers
 ```
 
-Luna should gather implementation context directly from the authorized workspace.
+Luna gathers implementation context directly from the authorized workspace.
 
 ## Compact executor handoff
-
-The executor should normally return:
 
 ```text
 Outcome: PASS | BLOCKED | FAIL
@@ -136,19 +116,13 @@ Proof: <acceptance evidence>
 Blockers: <none or exact blocker>
 ```
 
-Avoid returning full logs or full diffs unless the commander needs a specific section for validation.
+Avoid full logs or full diffs unless Sol needs a specific section for material validation.
 
 ## Correction loop
 
-If validation fails, Sol should send only the failed criterion and the minimum new evidence required to correct it.
+If validation fails, Sol sends only the failed criterion and minimum new evidence needed to correct it.
 
-Bad:
-
-```text
-<repeat the entire original prompt and repository history>
-```
-
-Good:
+Good correction packet:
 
 ```text
 Validation failed: rollback proof did not exercise the real enqueue function.
@@ -156,9 +130,11 @@ Correct only this criterion. Reuse the current executor context and return the
 transaction trace plus the targeted test result.
 ```
 
+Do not retransmit the entire project history by default.
+
 ## No duplicate workers
 
-For one bounded unit of work there should be one active Luna executor unless deliberate parallelization is part of the plan.
+For one bounded unit of work, keep one active Luna executor unless deliberate parallelization was explicitly planned.
 
 Before starting another executor:
 
@@ -171,31 +147,43 @@ Before starting another executor:
 
 Preferred order:
 
-1. If the executor transport itself provides a true blocking call that returns only on terminal completion, use it.
-2. Otherwise, if the executor has a local Codex session event stream, use the native watcher.
+1. If the executor transport provides a true blocking call that returns only on terminal completion, use it.
+2. Otherwise, if the executor has an exact local Codex session event stream, use a local non-LLM watcher.
 3. Avoid recurring short `wait_thread` / `wait_agent` calls that re-enter the commander model loop.
-4. If neither blocking transport nor observable terminal event is available, report the limitation rather than inventing completion.
+4. If neither blocking transport nor trustworthy terminal state can be observed, report the limitation rather than inventing completion.
 
-A local watcher may internally wait, block, or receive filesystem notifications for minutes or hours. That is acceptable because it is not an LLM turn.
+A local watcher may sleep and inspect file length for minutes or hours. That is acceptable because it is ordinary process work and does not invoke Sol or Luna.
 
 ## Windows watcher mechanics
 
 `scripts/watch-codex-task.ps1`:
 
 - resolves one explicit session file;
-- starts at the current end of the file by default, preventing an older `task_complete` event from falsely satisfying a new wait;
-- subscribes to filesystem change notifications;
-- reads only newly appended content;
-- parses complete JSONL records;
+- records the current EOF by default so historical `task_complete` events cannot satisfy a new wait;
+- optionally writes a local `ReadyFile` after the starting offset is captured;
+- checks the local file at a configurable process-level interval (250 ms by default);
+- reads only newly appended bytes;
+- buffers partial JSONL records until a newline arrives;
 - exits `0` on a new `task_complete` event;
-- exits non-zero on timeout, file truncation/rotation ambiguity, or invalid setup;
-- prints bounded status only.
+- exits `124` on configured timeout;
+- fails closed on truncation or ambiguous replacement;
+- prints only bounded terminal status metadata.
+
+The optional readiness signal is useful when a launcher wants to prove the watcher captured its starting offset before starting a very fast executor operation.
 
 Starting at EOF matters because a reused Codex session can contain earlier completed tasks.
 
 ## Portable fallback
 
-`scripts/watch-codex-task.py` provides a dependency-free cross-platform fallback. It tails appended JSONL records with a small local file poll interval. This fallback still uses **zero LLM calls** while waiting, although its filesystem mechanism is polling rather than Windows event notifications.
+`scripts/watch-codex-task.py` provides the same dependency-free pattern on Windows, macOS, and Linux. It also performs a small local filesystem poll and makes zero LLM calls while waiting.
+
+## Why not claim filesystem-event-driven waiting?
+
+An earlier prototype used `.NET FileSystemWatcher`. Windows CI showed that syntax validity was not enough to guarantee dependable completion delivery in this use case. The implementation therefore uses explicit local file checks instead.
+
+The orchestration is still **terminal-event-driven at the model boundary**: Sol resumes because a `task_complete` record is observed, not because a timer tells Sol to wake and ask Luna for status.
+
+This distinction is intentional and documented rather than hidden behind marketing language.
 
 ## Failure model
 
@@ -209,21 +197,21 @@ Fail immediately. Do not guess another session file unless the caller has an aut
 
 ### Session file is truncated or replaced
 
-Fail closed by default because a stale watcher could otherwise report completion for the wrong task.
+Fail closed. A stale offset could otherwise associate completion with the wrong task.
 
 ### Timeout
 
-A timeout is not proof of executor failure. Return a timeout state to the orchestration layer. The commander can decide whether to inspect once, extend a process-level wait, or escalate a genuine blocker.
+Timeout is not proof of executor failure. Return a timeout state to the orchestration layer. Sol can decide whether one bounded inspection or an extended local wait is appropriate.
 
-### Executor reports a blocker
+### Genuine blocker
 
-A real decision blocker can wake Sol before final completion if the transport exposes it explicitly. Ordinary progress messages should not.
+A real decision blocker can wake Sol early when the executor transport exposes it explicitly. Ordinary progress messages should not.
 
 ## Security boundaries
 
-- Never commit local `.codex/sessions` files.
+- Never commit `.codex/sessions` files.
 - Treat session logs as potentially sensitive.
-- The watcher should not echo prompt text, tool arguments, credentials, or arbitrary event payloads.
+- Do not echo prompt text, tool arguments, credentials, or arbitrary event payloads.
 - Observe only an explicitly selected session file.
 - Do not modify the session file.
 - Do not weaken repository permissions or production approval gates to keep orchestration automatic.
@@ -234,9 +222,9 @@ This repository deliberately does not promise a fixed percentage saving.
 
 Actual usage depends on task size, model effort, caching, retries, tool calls, context size, and Codex behavior. The architectural claim is narrower and testable:
 
-> Replacing repeated root-model status checks with a non-LLM wait can eliminate those specific root-model polling turns.
+> Replacing repeated root-model status checks with a non-LLM local wait can eliminate those specific root-model polling turns.
 
-Measure the workflow on representative tasks before drawing cost conclusions.
+Measure representative tasks before drawing broader cost conclusions.
 
 ## Model rationale
 
@@ -250,14 +238,13 @@ References:
 
 ## Non-goals
 
-This project is not trying to:
+This project does not try to:
 
-- replace Codex's permission model;
+- replace Codex permissions;
 - bypass user approvals;
-- guarantee that Luna Max is best for every coding workload;
-- create hidden background work outside Codex authority;
+- guarantee that Luna Max is best for every workload;
 - claim an official OpenAI architecture;
 - scrape or mutate arbitrary Codex sessions;
 - solve distributed scheduling in general.
 
-It solves one narrow operational problem: **keep the commander authoritative without paying the commander to perform passive waiting.**
+It solves one narrow operational problem: **keep the commander authoritative without using the commander for passive waiting.**
