@@ -106,7 +106,7 @@ try {
                 $stream.Dispose()
             }
 
-            $parts = $buffer -split "`n", -1
+            $parts = $buffer -split "`n"
             if ($parts.Count -gt 1) {
                 $buffer = $parts[-1]
                 foreach ($line in $parts[0..($parts.Count - 2)]) {
