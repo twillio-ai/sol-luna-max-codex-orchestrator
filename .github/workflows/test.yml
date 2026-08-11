@@ -24,7 +24,7 @@ jobs:
       - name: Run regression tests
         run: python -m unittest discover -s tests -v
 
-  powershell-parse:
+  powershell-watcher:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,4 +40,37 @@ jobs:
           if ($errors.Count -gt 0) {
             $errors | Format-List | Out-String | Write-Error
             exit 1
+          }
+      - name: Detect a new task_complete event
+        shell: pwsh
+        run: |
+          $session = Join-Path $env:RUNNER_TEMP 'codex-session.jsonl'
+          $stdout = Join-Path $env:RUNNER_TEMP 'watcher-stdout.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'watcher-stderr.txt'
+
+          '{"type":"event_msg","payload":{"type":"task_complete"}}' | Set-Content -LiteralPath $session -Encoding utf8
+
+          $proc = Start-Process pwsh -PassThru -WindowStyle Hidden `
+            -ArgumentList @(
+              '-NoProfile',
+              '-File', (Resolve-Path './scripts/watch-codex-task.ps1'),
+              '-SessionFile', $session,
+              '-TimeoutSeconds', '10'
+            ) `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr
+
+          Start-Sleep -Milliseconds 800
+          '{"type":"event_msg","payload":{"type":"agent_reasoning"}}' | Add-Content -LiteralPath $session -Encoding utf8
+          '{"type":"event_msg","payload":{"type":"task_complete"}}' | Add-Content -LiteralPath $session -Encoding utf8
+
+          $proc.WaitForExit()
+          if ($proc.ExitCode -ne 0) {
+            Get-Content -LiteralPath $stderr -ErrorAction SilentlyContinue | Write-Error
+            throw "Watcher exited with $($proc.ExitCode)"
+          }
+
+          $result = Get-Content -LiteralPath $stdout -Raw | ConvertFrom-Json
+          if ($result.event -ne 'EXECUTOR_TASK_COMPLETE') {
+            throw 'Watcher did not emit the expected terminal marker.'
           }
