@@ -12,6 +12,9 @@ Only newly appended JSONL records are parsed.
 The script does not call OpenAI, does not modify the session file, and does not
 print arbitrary event payloads.
 
+Use -ReadyFile when a launcher needs a deterministic local signal that the watcher
+has attached before it starts work that may complete very quickly.
+
 .EXITCODES
 0   A new task_complete event was observed.
 2   Invalid input or ambiguous/truncated session state.
@@ -27,7 +30,9 @@ param(
     [ValidateRange(0, 2147483647)]
     [int]$TimeoutSeconds = 0,
 
-    [switch]$FromStart
+    [switch]$FromStart,
+
+    [string]$ReadyFile = ''
 )
 
 Set-StrictMode -Version Latest
@@ -148,6 +153,14 @@ try {
     # Close the race between capturing the initial EOF and enabling notifications.
     if (Drain-AppendedEvents) {
         exit 0
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ReadyFile)) {
+        $readyPath = [System.IO.Path]::GetFullPath($ReadyFile)
+        if ($readyPath -eq $resolved) {
+            throw 'ReadyFile must not be the session file.'
+        }
+        [System.IO.File]::WriteAllText($readyPath, 'WATCHER_READY', [System.Text.Encoding]::UTF8)
     }
 
     while ($true) {
