@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-<#+
+<#
 .SYNOPSIS
 Wait for a new terminal Codex task event without using an LLM heartbeat.
 
@@ -58,16 +58,10 @@ try {
 
     $watcher = [System.IO.FileSystemWatcher]::new($directory, $fileName)
     $watcher.IncludeSubdirectories = $false
-    $watcher.NotifyFilter =
-        [System.IO.NotifyFilters]::LastWrite -bor
-        [System.IO.NotifyFilters]::Size -bor
-        [System.IO.NotifyFilters]::FileName
+    $watcher.NotifyFilter = [System.IO.NotifyFilters]::LastWrite -bor [System.IO.NotifyFilters]::Size -bor [System.IO.NotifyFilters]::FileName
 
     $sourceId = 'sol-luna-codex-' + [Guid]::NewGuid().ToString('N')
-    $subscription = Register-ObjectEvent \
-        -InputObject $watcher \
-        -EventName Changed \
-        -SourceIdentifier $sourceId
+    $subscription = Register-ObjectEvent -InputObject $watcher -EventName Changed -SourceIdentifier $sourceId
     $watcher.EnableRaisingEvents = $true
 
     $deadline = if ($TimeoutSeconds -gt 0) {
@@ -92,12 +86,15 @@ try {
 
         try {
             [void]$stream.Seek($script:offset, [System.IO.SeekOrigin]::Begin)
-            $remaining = $stream.Length - $script:offset
+            [long]$remaining = $stream.Length - $script:offset
             if ($remaining -le 0) {
                 return @()
             }
+            if ($remaining -gt [int]::MaxValue) {
+                throw 'New session chunk is too large to read safely in one pass.'
+            }
 
-            $bytes = New-Object byte[] $remaining
+            $bytes = New-Object byte[] ([int]$remaining)
             $read = $stream.Read($bytes, 0, $bytes.Length)
             $script:offset += $read
             $text = [System.Text.Encoding]::UTF8.GetString($bytes, 0, $read)
@@ -128,7 +125,6 @@ try {
             $record = $candidate | ConvertFrom-Json -Depth 32 -ErrorAction Stop
         }
         catch {
-            # A malformed/non-JSON line is ignored. No payload is printed.
             return $false
         }
 
@@ -164,9 +160,8 @@ try {
                 [Console]::Error.WriteLine('Timed out waiting for a new task_complete event.')
                 exit 124
             }
-            $evt = Wait-Event \
-                -SourceIdentifier $sourceId \
-                -Timeout ([Math]::Max(1, [Math]::Ceiling($remainingSeconds)))
+
+            $evt = Wait-Event -SourceIdentifier $sourceId -Timeout ([Math]::Max(1, [Math]::Ceiling($remainingSeconds)))
             if ($null -eq $evt) {
                 [Console]::Error.WriteLine('Timed out waiting for a new task_complete event.')
                 exit 124
@@ -185,11 +180,11 @@ catch {
     exit 2
 }
 finally {
-    if (Get-Variable -Name sourceId -Scope 0 -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name sourceId -ErrorAction SilentlyContinue) {
         Unregister-Event -SourceIdentifier $sourceId -ErrorAction SilentlyContinue
         Get-Event -SourceIdentifier $sourceId -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
     }
-    if (Get-Variable -Name watcher -Scope 0 -ErrorAction SilentlyContinue) {
+    if (Get-Variable -Name watcher -ErrorAction SilentlyContinue) {
         $watcher.EnableRaisingEvents = $false
         $watcher.Dispose()
     }
