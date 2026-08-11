@@ -1,271 +1,303 @@
 ---
 name: sol-luna-max-orchestrator
-description: Keep the current GPT-5.6 Sol Codex task as commander, delegate implementation-heavy work to GPT-5.6 Luna at max reasoning, and avoid repeated LLM heartbeat waits by using blocking execution or a local non-LLM completion watcher.
+description: Keep GPT-5.6 Sol as the single Codex commander, run implementation-heavy work in fresh GPT-5.6 Luna Max executor sessions through any supported transport that actually exposes Luna, preserve the authorized workspace, continue automatically across executor boundaries, and let a local non-LLM process wait for completion instead of spending root-model turns on heartbeat polling.
 ---
 
 # Sol + Luna Max Codex Orchestrator
 
-Use this skill when the user wants a single Codex commander task where GPT-5.6 Sol stays responsible for planning and review while GPT-5.6 Luna Max performs long execution work.
+Use this skill when one Codex conversation should remain the user-facing commander while GPT-5.6 Luna at `max` reasoning performs long execution work.
 
-## Core contract
-
-The user interacts with **one commander task**.
-
-Default roles:
+## Default roles
 
 ```text
-Root / commander: current GPT-5.6 Sol task
+Root / commander: current GPT-5.6 Sol session
 Planner: root
-Executor: GPT-5.6 Luna at max reasoning
+Executor role: GPT-5.6 Luna at max reasoning
 Advisor: none
 Designer: none
 Wait layer: local non-LLM process
 ```
 
-The root remains the final authority for the goal, constraints, permissions, architecture, acceptance criteria, review, correction decisions, and final user-facing answer.
+The user interacts only with Sol. Sol owns the overall goal until the requested end-state is proven.
 
-Do not ask the user to manually open Luna, move results between sessions, check whether the executor is finished, or start a reviewer task.
+## Hard invariants
 
-## Required control flow
+### 1. Commander/executor isolation
+
+Sol and Luna must run in distinct execution contexts.
+
+- Never use the root Sol session as the Luna executor.
+- Never point the completion watcher at the root Sol session.
+- Before delegation, identify the exact Luna executor session/thread/task.
+- If executor identity is ambiguous, fail closed.
+
+### 2. Executor role is transport-agnostic
+
+**Luna executor is a role, not a synonym for subagent.**
+
+The active Codex environment may expose Luna execution through different supported transports, including a fresh thread/session, delegated worker, isolated execution route, or another supported mechanism.
+
+Do not hard-code one transport as the architecture.
+
+A native subagent/worker route is valid only when it explicitly supports all required executor properties:
+
+- model = `gpt-5.6-luna`;
+- reasoning effort = `max`;
+- correct authorized repository/workspace;
+- distinct executor identity;
+- observable terminal state.
+
+If a route rejects Luna, for example with `Unknown model gpt-5.6-luna`, mark that **route** unsupported for the current environment. Do not silently substitute Sol, Terra, or another executor. Do not repeatedly retry the same unsupported route.
+
+If another supported Codex transport explicitly exposes Luna Max, one bounded transport switch is allowed before execution begins. This is transport resolution, not model shopping.
+
+Once a Luna route is successfully verified in the current environment/task, reuse that transport choice for later fresh-executor rollovers unless it becomes unavailable. Do not re-probe every phase.
+
+### 3. Workspace affinity
+
+Every Luna executor must preserve the exact authorized repository/workspace/folder and relevant project instructions.
+
+If the active Codex environment already has a project association and the selected transport supports preserving it, keep that association.
+
+Project nesting is helpful metadata, not the definition of the executor role. Do not invent or rediscover a project when authoritative workspace/project identity is already known.
+
+A fresh executor means fresh conversation/execution context, not a different repository or unrelated workspace.
+
+### 4. Overall-goal ownership
+
+A terminal Luna task is not the same thing as completion of the user's overall goal.
+
+Sol must not return control to the user merely because one executor reached `task_complete`.
+
+## Required lifecycle
 
 ```text
 USER
-→ SOL bounds the work
-→ LUNA MAX executes
-→ non-LLM process waits for terminal completion
-→ SOL validates
-→ accepted: final answer
-→ rejected: bounded correction to LUNA MAX
-→ non-LLM wait
-→ SOL validates again
+→ SOL understands overall goal
+→ SOL creates bounded phase A
+→ fresh LUNA MAX executor A via verified supported transport
+→ exact same authorized workspace
+→ local non-LLM watcher waits on Luna A
+→ SOL validates A
+→ overall goal complete? yes → final report
+→ overall goal complete? no  → bounded phase B
+                              → fresh LUNA MAX executor B
+                              → local watcher
+                              → SOL validates B
+                              → repeat
 ```
 
-Sol may wake early only for a genuine decision blocker, terminal executor failure, required permission boundary, or a transport limitation that cannot be handled without root judgment.
+The user must not be required to manually open, resume, copy, transfer, review, or start executor sessions.
 
-Ordinary progress is not a reason to wake Sol.
+## Transport resolution
 
-## Commander responsibilities
+Before the first real Luna phase:
 
-Sol should:
+1. Prefer a Luna-capable transport already proven in the current Codex environment.
+2. If capability is unknown, perform one bounded resolution pass.
+3. Validate the exact Luna model/effort, workspace binding, executor identity, and terminal observability.
+4. Do not perform implementation work during route probing.
+5. If one route explicitly rejects Luna, do not retry it.
+6. If another supported route explicitly advertises Luna Max and can preserve the required workspace, switch once to that route.
+7. If no supported route satisfies the contract, stop with the exact transport limitation.
 
-1. understand the user's current goal;
-2. preserve already-known evidence instead of restarting architecture discovery;
-3. define one bounded executor packet;
-4. delegate implementation-heavy work;
-5. remain idle while the executor is running;
-6. validate the compact terminal handoff;
-7. send a bounded correction if a concrete acceptance criterion failed;
-8. give the user the final result.
+Do not run broad project discovery merely because one executor transport failed. Resolve only the missing capability.
 
-Sol should not perform implementation work that the configured Luna executor can perform safely.
+## Autonomous continuation
 
-## Executor responsibilities
+After every terminal Luna result, Sol must:
 
-Luna Max should perform the long worker path, including as relevant:
+1. validate the result;
+2. decide whether the overall user goal is complete;
+3. if complete, return the final report;
+4. if incomplete, create the next bounded packet automatically;
+5. launch the next appropriate fresh Luna Max executor automatically;
+6. continue without asking the user to manage worker lifecycle.
 
-- repository investigation;
-- code changes;
-- database/query diagnosis;
-- targeted tests;
-- deterministic reproduction;
-- browser/test-environment work already authorized by the user;
-- CI/debugging work;
-- corrective implementation after review.
+Do not stop merely because a Luna session is terminal, a deployment creates a proof phase, a canary exposes a correctable defect, or a fresh executor is needed.
 
-Luna should inspect the authorized workspace itself. Do not force Sol to gather and retransmit large repository context first.
+## Fresh executor lifecycle
 
-## Bounded delegation packet
+For each **new bounded phase after terminal completion**, launch a fresh Luna Max executor by default.
 
-Send only what Luna needs:
+Examples:
+
+- diagnosis → implementation;
+- implementation → deployment verification;
+- deployment verification → canary/proof;
+- one blocker → a separate newly discovered blocker;
+- completed production blocker → broader backlog item;
+- one audit scope → another audit scope.
+
+A `context_compacted` event is a strong signal to retire that executor for subsequent phases.
+
+### Narrow same-session correction exception
+
+Reuse the same Luna session only when all are true:
+
+1. the work is a short direct correction to the exact same bounded phase;
+2. no new goal/phase has been introduced;
+3. executor identity is certain;
+4. the transport safely supports continuation;
+5. the context has not become meaningfully bloated or compacted;
+6. no side-effect ambiguity exists.
+
+Otherwise launch a fresh Luna Max executor with a compact handoff.
+
+## Compact rollover handoff
+
+Do not send a fresh Luna executor the entire old transcript.
+
+Send only:
 
 ```text
 GOAL
-<one concrete outcome>
+<one concrete bounded outcome>
 
-KNOWN EVIDENCE
-<only facts that materially constrain the task>
+KNOWN PROOF
+<validated facts from previous phases that matter now>
+
+CURRENT BLOCKER / NEXT STEP
+<what remains unresolved>
+
+WORKSPACE IDENTITY
+<repository, branch/worktree, folder, project metadata when relevant>
 
 NON-NEGOTIABLE CONSTRAINTS
-<architecture, safety, production and permission boundaries>
+<architecture, safety, production, permission boundaries>
 
 ACCEPTANCE CRITERIA
-<deterministic proof required before success>
+<deterministic proof required for this phase>
+
+RELEVANT IDENTIFIERS
+<commit, workflow, canary, execution, row, test ids when needed>
 
 RETURN CONTRACT
 - outcome
 - root cause when relevant
 - changed files/components
-- checks and results
+- tests/checks and results
 - proof
 - unresolved blockers
+- next bounded execution, if any
 ```
 
-Do not duplicate full logs, full diffs, or large file contents unless a specific validation question requires them.
-
-## Luna route
-
-When the user explicitly requires GPT-5.6 Luna at max reasoning, the route is mandatory.
-
-- Use the currently supported Codex transport that can actually run `gpt-5.6-luna` at `max`.
-- Do not hard-code `agents.spawn_agent` if that namespace does not expose Luna in the active Codex build.
-- Do not silently substitute Terra, Sol, or another executor.
-- If Luna cannot launch, report the exact route/transport failure and stop unnecessary retry exploration.
-- Do not burn quota repeatedly probing the same unavailable route.
-
-A one-time tiny real Luna route verification is allowed when route callability is genuinely unknown. Once one real Luna execution succeeds in the current commander task, do not verify it again.
+Luna gathers implementation context from the authorized workspace itself.
 
 ## No duplicate executors
 
-For one bounded work item, keep one active Luna executor.
+For one bounded phase, keep exactly one active Luna executor unless deliberate parallelization was explicitly designed.
 
-Before creating another worker, determine whether an existing executor can be safely continued or reused. Never duplicate a task that can mutate production, send external messages, create releases, or perform another irreversible action.
+Before launching the next fresh executor:
 
-Do not let Luna spawn descendant agents for ordinary implementation work unless the user explicitly asks for parallel multi-agent execution and the commander has bounded the side effects.
+1. confirm the previous executor is terminal or intentionally abandoned;
+2. confirm the new packet is a distinct phase or fresh-session correction;
+3. preserve workspace identity;
+4. do not duplicate production mutations, deployments, messages, canaries, or irreversible actions;
+5. map the watcher to the new Luna executor's exact session.
 
 ## Waiting policy: no expensive heartbeat
 
-Never use recurring short `wait_thread`, `wait_agent`, status-check, or equivalent root-model loops merely to see whether Luna is still running.
+Never use recurring short `wait_thread`, `wait_agent`, status-check, or equivalent root-model loops merely to ask whether Luna is still running.
 
-Preferred waiting order:
+Preferred order:
 
-1. **Blocking transport:** if the executor call can block until terminal completion without recurring root turns, use it.
-2. **Local event watcher:** when an executor Codex session file is available, start the repository's native watcher and let the local process wait for `task_complete`.
-3. **Fail clearly:** if neither a blocking transport nor a trustworthy terminal event can be observed, report the transport limitation instead of inventing completion.
+1. blocking executor transport that returns on terminal completion without recurring Sol turns;
+2. local non-LLM watcher on the exact Luna executor session;
+3. fail clearly when neither safe blocking nor trustworthy completion observation is available.
 
-For Windows, prefer:
+On Windows:
 
 ```powershell
-./scripts/watch-codex-task.ps1 -SessionFile <exact-executor-session-jsonl>
+./scripts/watch-codex-task.ps1 -SessionFile <exact-luna-executor-session-jsonl>
 ```
 
-The watcher must start at the current EOF by default. Reused Codex sessions can contain earlier `task_complete` records, so scanning historical completion events is unsafe for a new wait.
+The watcher must observe only the Luna executor session, start at current EOF by default, ignore historical completion events, make no model calls, and emit bounded terminal status only.
 
-The watcher is not an agent. It must not call a model, make architectural decisions, modify the session, or print arbitrary session payloads.
-
-A long local wait is acceptable. Wall-clock waiting must not itself cause recurring Sol turns.
-
-## Root wake-up events
-
-Wake Sol when one of these is true:
-
-- Luna reaches terminal completion;
-- Luna reaches a terminal failure;
-- Luna exposes a real decision blocker that requires commander judgment;
-- a permission/approval boundary requires the user or root;
-- the trusted wait transport itself fails or becomes ambiguous.
-
-Do not wake Sol for:
-
-- “still running”;
-- elapsed time alone;
-- ordinary progress messages;
-- repeated status checks;
-- local watcher keepalive.
-
-## Executor return contract
-
-Prefer a compact terminal handoff:
-
-```text
-Outcome: PASS | BLOCKED | FAIL
-Root cause: <bounded explanation>
-Changed: <files/components>
-Checks: <test/check → result>
-Proof: <acceptance evidence>
-Blockers: <none or exact blocker>
-```
-
-Sol should inspect additional context only where needed to validate a material claim.
+Local file polling is ordinary process work, not an LLM heartbeat.
 
 ## Validation and correction
 
-Sol must review the executor's result; delegation does not mean automatic acceptance.
+Sol validates every Luna result.
 
-If the result fails validation:
+If validation fails:
 
-- identify the exact failed acceptance criterion;
-- send that bounded correction back to the existing Luna context when safe;
-- do not retransmit the entire original task unless the executor lost required context;
-- do not take over implementation in Sol merely because one correction is needed.
+1. identify the exact failed acceptance criterion;
+2. determine whether it is a narrow same-phase correction or a new bounded phase;
+3. reuse the same Luna session only if the narrow exception applies;
+4. otherwise launch a fresh Luna Max executor through the already verified transport with a compact correction packet;
+5. do not move ordinary implementation into Sol.
 
-Example:
+## External canaries: trace first, repair second
+
+When a task includes a live external canary, read `references/trace-first-canary.md` before sending it.
 
 ```text
-Validation failed: the rollback proof bypassed the real enqueue function.
-Correct only this criterion. Exercise the production-equivalent function inside a
-rollback-only transaction, return the targeted test result and bounded evidence,
-and do not send an external canary.
+ONE live canary
+→ freeze and correlate attempt
+→ PASS / FAIL / BLOCKED / NOT_REACHED / UNKNOWN by layer
+→ safe component probes for downstream NOT_REACHED layers
+→ one defect ledger
+→ bounded repair phases
+→ deterministic proof + deploy/parity
+→ ONE new end-to-end canary
 ```
+
+Do not immediately patch the first defect and resend while the rest of the stack remains uncharacterized.
+
+Component proof is recorded separately from live end-to-end status.
 
 ## Production and external side effects
 
-Preserve the user's existing production gates and ordering.
+Preserve existing production, security, approval, tenant, trust, and provider boundaries.
 
-Do not use orchestration convenience as a reason to:
+A failed external canary stops blind retries, not necessarily the overall orchestration.
 
-- weaken validation;
-- bypass trusted receipts;
-- skip deterministic proof;
-- send duplicate external canaries;
-- bypass OAuth, access, or approval boundaries;
-- silently change architecture;
-- broaden the task beyond the current blocker.
-
-If the executor can perform an already-authorized test/browser action safely, do not hand that routine coordination back to the user.
+Ask the user only for a genuinely new permission, credential, business, financial, irreversible-production, or product decision not covered by the original goal.
 
 ## Cost-efficiency policy
 
-This skill does not promise a fixed cost reduction.
+This skill does not promise a fixed savings percentage.
 
-It minimizes avoidable root-model work by enforcing these behaviors:
+It targets avoidable work by enforcing:
 
-- Sol does not repeatedly poll Luna;
-- Sol does not duplicate Luna's repository investigation;
-- Luna returns compact evidence;
-- corrections contain only failed criteria and new evidence;
-- passive waiting is local process work;
-- mandatory Luna failures do not trigger model-shopping retries.
-
-The measurable target is **fewer unnecessary root-model turns**, not a marketing percentage.
+- no repeated Sol heartbeat polling;
+- local process waiting;
+- fresh Luna context for new phases;
+- compact rollover packets;
+- one verified executor transport instead of repeated route probing;
+- no silent model substitution;
+- no duplicate executor work;
+- trace-first canaries that extract more evidence from each external side effect.
 
 ## User experience
 
-The user should experience the workflow as one conversation:
+The desired experience is:
 
 ```text
-user → Sol commander → work happens → Sol final report
+user → Sol commander
+     → fresh Luna Max executor through verified transport
+     → local watcher
+     → Sol review
+     → fresh Luna Max executor when needed
+     → ...
+     → final result
 ```
 
-The user should not need to say:
+The user should never need to say:
 
 ```text
 check Luna
 resume Luna
 open another Luna
 copy this to Sol
-review Luna
 start the next worker
 ```
 
-If the orchestration layer requires those manual steps for ordinary execution, it has failed this skill's UX contract.
-
-## Final report
-
-When the requested work is complete, Sol should report only the information that helps the user understand what happened:
-
-- outcome;
-- root cause when relevant;
-- smallest correct fix;
-- tests/proof;
-- production/deployment result when relevant;
-- remaining next action if any.
-
-Do not expose internal orchestration chatter unless the user asks for it.
-
 ## Project identity
 
-This skill belongs to the independent community repository:
+Independent community repository:
 
 https://github.com/twillio-ai/sol-luna-max-codex-orchestrator
 
-It is not an official OpenAI skill. OpenAI Codex and GPT-5.6 model behavior remain controlled by OpenAI and can change over time.
+This is not an official OpenAI skill. OpenAI Codex and GPT model behavior can change over time.

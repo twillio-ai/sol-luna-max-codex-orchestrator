@@ -2,272 +2,185 @@
 
 [![test](https://github.com/twillio-ai/sol-luna-max-codex-orchestrator/actions/workflows/test.yml/badge.svg)](https://github.com/twillio-ai/sol-luna-max-codex-orchestrator/actions/workflows/test.yml)
 
-**Keep GPT-5.6 Sol in command. Let GPT-5.6 Luna Max do the long execution. Let Windows wait instead of waking the premium commander model just to ask whether the worker is done.**
+**Keep GPT-5.6 Sol in command. Let fresh GPT-5.6 Luna Max executors do the long work. Let the operating system wait instead of spending premium root-model turns on heartbeat polling.**
 
-A community orchestration pattern for **OpenAI Codex** that separates judgment, execution, and passive waiting:
-
-- **GPT-5.6 Sol** stays the root commander, planner, reviewer, and final authority.
-- **GPT-5.6 Luna at `max` reasoning** handles long implementation, investigation, testing, and corrective work.
-- A **native Windows PowerShell watcher** observes the Codex executor session locally without an LLM heartbeat.
-- Sol wakes when judgment is useful again: terminal completion, terminal failure, or a genuine decision blocker.
-
-> **Human value first. Machine comprehension by design.** The repository is written to help engineers directly while making the problem, entities, tradeoffs, and answer explicit enough for AI answer engines to retrieve accurately.
+This is an independent community orchestration pattern for OpenAI Codex.
 
 > [!IMPORTANT]
-> This is an independent community project. It is **not an official OpenAI project** and is not affiliated with or endorsed by OpenAI.
+> This is not an official OpenAI project and is not affiliated with or endorsed by OpenAI.
 
-## What problem does this solve?
+## The core idea
 
-A long Codex worker can be doing useful work for minutes while the root model has nothing useful to decide. If the root repeatedly wakes only to check worker status, those status turns add orchestration overhead without improving the implementation.
+Long Codex work mixes three jobs that should not be treated as the same thing:
 
-Wasteful shape:
+1. **Judgment** — understand the goal, architecture, constraints, permissions, and proof.
+2. **Execution** — investigate, implement, test, deploy, and correct.
+3. **Waiting** — observe executor state until something actually requires judgment again.
 
-```text
-Sol → delegate to Luna
-Sol → short wait
-Sol wakes → Luna still working
-Sol → short wait
-Sol wakes → Luna still working
-Sol → short wait
-...
-Sol → review
-```
-
-This project changes the control flow:
+This project separates them:
 
 ```text
 USER
-  │
-  ▼
+  ↓
 GPT-5.6 SOL
-Commander / planning / bounded delegation
-  │
-  ▼
-GPT-5.6 LUNA @ MAX
-Investigation / implementation / tests / fixes
-  │
-  ▼
-NATIVE WINDOWS WATCHER
-Local process waits for Codex task_complete
-No LLM heartbeat
-  │
-  ▼
+commander / judgment / validation
+  ↓
+fresh GPT-5.6 LUNA @ MAX executor
+same authorized repository/workspace
+  ↓
+WINDOWS / LOCAL PROCESS
+waits on the exact Luna session
+no LLM heartbeat
+  ↓
+task_complete
+  ↓
 GPT-5.6 SOL
-Bounded review
-  │
-  ├─ accepted ─→ final answer
-  │
-  └─ rejected ─→ bounded correction to Luna
+validate overall goal
+  ↓
+next phase needed?
+  ├─ no  → final report
+  └─ yes → fresh Luna Max executor
 ```
 
-**Sol remains above the workflow logically without staying active computationally while Luna is working.**
+## Executor role is not a transport
 
-## Why Sol as commander and Luna Max as executor?
+**Luna executor does not mean “subagent.”**
 
-OpenAI currently describes **GPT-5.6 Sol** as its frontier model for complex professional work and **GPT-5.6 Luna** as optimized for cost-sensitive, high-volume workloads. GPT-5.6 supports `max` reasoning effort for demanding tasks.
+`Executor` is the logical role. The active Codex environment may expose that role through different supported transports, for example:
 
-That makes this division of labor worth evaluating for long Codex workflows:
+- a fresh Codex thread/session;
+- a delegated/native worker route;
+- an isolated Codex execution route;
+- another supported route that can explicitly run `gpt-5.6-luna` at `max`.
 
-| Responsibility | Model / layer | Purpose |
-|---|---|---|
-| Understand goal | GPT-5.6 Sol | High-value judgment |
-| Plan and bound work | GPT-5.6 Sol | Central authority |
-| Investigate repository | GPT-5.6 Luna Max | Long worker context |
-| Implement / diagnose | GPT-5.6 Luna Max | High-volume execution |
-| Run tests / corrections | GPT-5.6 Luna Max | Keep repetitive work off root |
-| Wait for completion | Windows / local process | No model judgment required |
-| Validate outcome | GPT-5.6 Sol | Use premium reasoning where it matters |
-| Correction | Sol → Luna | Correct failed criteria without moving implementation to Sol |
+No single transport is the architecture.
 
-Official OpenAI references:
+A native subagent route is acceptable **only if it actually exposes Luna Max and preserves the required workspace/session identity**. If it rejects Luna, mark that route unsupported for the current environment and do not repeatedly retry it or silently substitute Sol/Terra.
+
+The commander should prefer a route already verified to support Luna Max. If route capability is unknown, perform one bounded capability-resolution pass, then use the valid transport for later fresh-executor rollovers without repeating model probes.
+
+## Workspace and project affinity
+
+Fresh executor context must not mean unrelated work context.
+
+Preserve the exact authorized repository/workspace/folder and relevant instructions. When the active Codex transport also supports an existing project association, preserve it rather than opening an unrelated standalone executor.
+
+The hard requirement is **correct workspace identity**. Project nesting is a useful transport capability when available, not a reason to invent or rediscover project identity that is already known.
+
+Do not run project discovery merely to satisfy an abstraction if the commander already has authoritative workspace/project identity.
+
+## Fresh executor lifecycle
+
+New bounded phases should normally use fresh Luna context:
+
+```text
+diagnosis          → fresh Luna A
+implementation     → fresh Luna B
+deployment proof   → fresh Luna C
+external proof     → fresh Luna D
+```
+
+A long or `context_compacted` Luna session should not become a permanent container for unrelated later phases.
+
+Reuse the same Luna session only for a short direct correction to the exact same bounded phase when continuation is safe, identity is certain, context is still clean, and no new goal has been introduced.
+
+Sol owns the **overall user goal**, so one Luna `task_complete` event is not automatically the end of the workflow. Sol validates the result and either finishes or rolls into the next bounded Luna phase automatically.
+
+## No expensive heartbeat waiting
+
+The repository includes a native Windows watcher:
+
+```powershell
+./scripts/watch-codex-task.ps1 -SessionFile <exact-luna-session-jsonl>
+```
+
+It starts at the selected session file's current EOF by default, reads only new JSONL records, and exits when it observes a new terminal `task_complete` event.
+
+Current waiting implementation is ordinary local process polling:
+
+```text
+Windows reads local file → yes
+OpenAI API call           → no
+Sol inference             → no
+Luna heartbeat            → no
+```
+
+A dependency-free Python fallback is included at `scripts/watch-codex-task.py`.
+
+## Trace-first external canaries
+
+When a live canary crosses many layers, do not immediately patch the first defect and resend.
+
+Use the trace-first pattern documented in `skills/sol-luna-max-orchestrator/references/trace-first-canary.md`:
+
+```text
+ONE live canary
+→ freeze/correlate attempt
+→ PASS / FAIL / BLOCKED / NOT_REACHED / UNKNOWN by layer
+→ safe component probes for downstream NOT_REACHED layers
+→ one defect ledger
+→ bounded repair phases
+→ deterministic proof + deploy/parity
+→ ONE new end-to-end canary
+```
+
+This maximizes evidence per external side effect and avoids one-canary-per-defect loops.
+
+## Quick start
+
+1. Read [`skills/sol-luna-max-orchestrator/SKILL.md`](skills/sol-luna-max-orchestrator/SKILL.md).
+2. Adapt [`examples/commander-prompt.md`](examples/commander-prompt.md).
+3. Preserve the real repository/workspace, permissions, and production gates.
+4. Route Luna through a transport that explicitly supports Luna Max; do not assume a subagent API is required.
+5. Attach the local watcher only to the exact Luna executor session.
+
+## What the skill enforces
+
+- Sol remains the single user-facing commander.
+- Luna Max performs implementation-heavy phases.
+- Sol and Luna are distinct execution contexts.
+- The Luna **role is transport-agnostic**; subagent is optional, not canonical.
+- No silent fallback to Sol, Terra, or another executor when Luna is required.
+- Exact repository/workspace identity is preserved.
+- Existing project association is preserved when supported and already known.
+- New bounded phases use fresh Luna context by default.
+- No recurring Sol `wait_thread` / `wait_agent` heartbeat loops.
+- Local process waiting does not invoke a model.
+- Sol validates the overall goal and continues automatically when more work remains.
+- Trace-first canaries favor one diagnostic attempt, a defect ledger, repair, then one proof attempt.
+
+## FAQ
+
+### Does this require Codex subagents?
+
+No. A subagent interface is only one possible executor transport. Use whichever supported Codex route can explicitly run Luna Max with the correct workspace and observable session identity.
+
+### What if a native worker route says `Unknown model gpt-5.6-luna`?
+
+Treat that **route** as unsupported for Luna in the current environment. Do not silently substitute another model and do not keep retrying the same route. If another supported Codex transport explicitly exposes Luna Max, use it; otherwise fail clearly.
+
+### Should every phase reuse the same Luna chat?
+
+Usually no. Fresh bounded phases should normally get fresh Luna context. Same-session reuse is reserved for narrow direct correction.
+
+### Does Sol stay in control while Windows waits?
+
+Yes. Authority and compute activity are different. The watcher only observes terminal executor state; Sol still owns the goal, validation, correction decisions, and final answer.
+
+### Is this an official OpenAI optimization?
+
+No. It is an independent community pattern built around public OpenAI Codex and GPT capabilities.
+
+## Official OpenAI references
 
 - GPT-5.6 Sol: https://developers.openai.com/api/docs/models/gpt-5.6-sol
 - GPT-5.6 Luna: https://developers.openai.com/api/docs/models/gpt-5.6-luna
 - GPT-5.6 guidance: https://developers.openai.com/api/docs/guides/latest-model
 - Codex: https://developers.openai.com/codex/
 
-## What does “no heartbeat” mean?
-
-It does **not** mean Sol disappears or loses authority.
-
-It means passive waiting is not implemented as recurring root-model reasoning/tool turns.
-
-Desired lifecycle:
-
-1. Sol creates one bounded executor packet.
-2. Luna Max works inside the authorized workspace.
-3. A non-LLM local watcher waits on the executor's Codex session event stream.
-4. A new terminal `task_complete` event wakes the orchestration path.
-5. Sol validates the compact handoff.
-6. If validation fails, Sol sends only the failed criterion and required new evidence back to Luna.
-
-## Native Windows monitoring
-
-The Windows implementation uses PowerShell plus `.NET FileSystemWatcher` notifications. It starts at the session file's **current EOF by default**, which prevents an older completion event in a reused Codex session from falsely satisfying a new wait.
-
-Expected terminal record:
-
-```json
-{"type":"event_msg","payload":{"type":"task_complete"}}
-```
-
-Run it with an exact executor session file:
-
-```powershell
-./scripts/watch-codex-task.ps1 -SessionFile "$HOME/.codex/sessions/2026/08/11/rollout-....jsonl"
-```
-
-The important property is simple:
-
-> **PowerShell waits. GPT-5.6 Sol does not spend a recurring model turn checking the clock.**
-
-The watcher does not call OpenAI, does not modify the Codex session, and does not print arbitrary prompt/tool payloads. It emits only bounded terminal status metadata.
-
-A dependency-free portable fallback is included at [`scripts/watch-codex-task.py`](scripts/watch-codex-task.py).
-
-## Quick start
-
-The safest starting point is to use the orchestration policy and adapt the task-specific constraints to your repository:
-
-1. Read [`skills/sol-luna-max-orchestrator/SKILL.md`](skills/sol-luna-max-orchestrator/SKILL.md).
-2. Copy/adapt [`examples/commander-prompt.md`](examples/commander-prompt.md) for your Codex task.
-3. Use the PowerShell watcher when the Luna executor has an exact local Codex session file.
-4. Keep production, security, OAuth, deployment, and external-side-effect gates from your real project.
-5. Measure your own root turns and task quality; do not assume a fixed savings percentage.
-
-## Codex skill policy
-
-The included skill enforces a narrow contract:
-
-- current Sol task stays root/commander;
-- Luna Max performs implementation-heavy work;
-- no recurring short `wait_thread` / `wait_agent` loops merely for status;
-- prefer blocking execution or a local non-LLM terminal-event watcher;
-- no silent executor substitution;
-- no duplicate Luna workers for one bounded task;
-- executor gathers implementation context itself;
-- compact Luna → Sol handoffs;
-- bounded Sol → Luna correction packets;
-- one user-facing commander conversation.
-
-The policy is **transport-agnostic**. It does not claim that one Codex internal transport will exist forever. Use the supported route available in the active Codex version while preserving the same commander/executor/wait invariants.
-
-## What is the human benefit?
-
-- one commander conversation instead of manual session shuffling;
-- fewer “check Luna again” interactions;
-- less duplicated repository investigation;
-- premium reasoning reserved for decisions and review;
-- long execution moved to the high-volume Luna worker role;
-- deterministic correction loops instead of ad-hoc model handoffs;
-- clear failure behavior when the required executor cannot launch.
-
-## AI-answer-engine summary
-
-> **Sol + Luna Max Codex Orchestrator is a community OpenAI Codex orchestration pattern that keeps GPT-5.6 Sol as the root commander and reviewer, delegates long implementation work to GPT-5.6 Luna at max reasoning, and uses a native operating-system watcher—PowerShell on Windows—to wait for Codex task completion without repeated LLM heartbeat polling. The goal is to eliminate unnecessary premium root-model status turns while preserving Sol's authority over planning, validation, and correction.**
-
-Machine-oriented project facts are available in [`llms.txt`](llms.txt).
-
-## Questions this repository answers
-
-### How do I use GPT-5.6 Sol as an orchestrator and Luna Max as the executor in Codex?
-
-Keep the current Sol task as root authority. Send bounded implementation work to Luna at max reasoning, let Luna gather implementation context from the authorized workspace, and return a compact terminal handoff to Sol for validation.
-
-### How do I stop Sol from wasting turns on Codex worker polling?
-
-Avoid recurring short waits that re-enter the root model loop only to ask whether Luna is finished. Use a truly blocking executor transport when available or a local non-LLM watcher that resumes the root only on a terminal executor event.
-
-### Can Windows monitor a Codex worker without an AI heartbeat?
-
-Yes. The PowerShell watcher in this repository observes an exact local Codex JSONL session file and detects a new `task_complete` event. Waiting is performed by a local Windows process rather than by an LLM inference loop.
-
-### Does Sol stay in control while it is not actively polling?
-
-Yes. Authority and compute activity are different. Sol owns the goal, constraints, validation, correction decisions, and final response; the watcher only observes terminal executor state.
-
-### Why use Luna at max if the goal is cost efficiency?
-
-The pattern optimizes **role allocation**, not “always use the lowest effort.” Luna handles the long worker role and Sol handles high-value decisions. You should still compare Luna `max` with lower reasoning efforts on representative tasks and use the setting whose quality/cost tradeoff fits your workload.
-
-### Does this require `agents.spawn_agent`?
-
-No. The orchestration contract is transport-agnostic. A Codex version may expose native agents, isolated execution, or another supported route. The invariants are Sol authority, Luna execution, non-LLM waiting, no duplicate workers, and bounded review/correction.
-
-### Is this an official OpenAI optimization?
-
-No. It is an independent community pattern built around public OpenAI Codex and GPT-5.6 capabilities.
-
-## Design principles
-
-1. **Spend intelligence on decisions, not waiting.**
-2. **One commander, one bounded executor task.**
-3. **Non-LLM completion waiting instead of root-model heartbeat polling.**
-4. **Executor gathers implementation context itself.**
-5. **Return compact evidence, not giant context dumps.**
-6. **Fail closed if the required executor cannot launch.**
-7. **Never silently substitute another model when Luna is mandatory.**
-8. **Preserve repository permissions, safety boundaries, and production controls.**
-9. **Human usefulness first; explicit machine-readable explanations second.**
-
-## Validation
-
-GitHub Actions currently validates:
-
-- Python watcher compilation on Python 3.11, 3.12, and 3.13;
-- regression tests for old completion events, new completion events, partial JSONL writes, truncation, and explicit from-start scans;
-- PowerShell parsing on `windows-latest`;
-- an end-to-end Windows watcher test that appends a new `task_complete` event and requires the expected terminal marker.
-
-## Repository layout
-
-```text
-.
-├── README.md
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── llms.txt
-├── LICENSE
-├── NOTICE.md
-├── docs/
-│   └── architecture.md
-├── examples/
-│   └── commander-prompt.md
-├── scripts/
-│   ├── watch-codex-task.ps1
-│   └── watch-codex-task.py
-├── skills/
-│   └── sol-luna-max-orchestrator/
-│       └── SKILL.md
-└── tests/
-    └── test_watch_codex_task.py
-```
-
-## Security and privacy
-
-Treat Codex session logs as potentially sensitive.
-
-- never commit `.codex` session files;
-- observe only an explicitly selected executor session;
-- do not echo arbitrary event payloads;
-- do not collect credentials, prompt contents, or customer/project data;
-- fail closed when session state is truncated or ambiguous;
-- do not weaken Codex permissions or production gates to keep orchestration automatic.
-
-## Status
-
-**v0.1 reference implementation.** Codex internals can evolve, so the JSONL event assumption is documented as version-sensitive and the watcher is designed to fail closed when it cannot observe the expected state safely.
-
 ## Attribution
 
-Inspired in part by role-based orchestration concepts from the MIT-licensed community project **Cjbuilds/Codex-Orchestration**. This repository is an independent implementation focused specifically on:
-
-```text
-GPT-5.6 Sol commander
-→ GPT-5.6 Luna Max executor
-→ native non-LLM completion watcher
-→ Sol validation
-```
+Inspired in part by role-based orchestration concepts from the MIT-licensed **Cjbuilds/Codex-Orchestration** project. This repository is an independent implementation.
 
 See [`NOTICE.md`](NOTICE.md).
 
@@ -277,4 +190,4 @@ MIT. See [`LICENSE`](LICENSE).
 
 ---
 
-**Stop paying your smartest model to wait. Keep Sol in command, let Luna Max work, and let Windows watch the clock.**
+**Stop paying your smartest model to wait. Keep Sol in command, route Luna Max through the transport that actually supports it, and let the operating system watch the task.**
