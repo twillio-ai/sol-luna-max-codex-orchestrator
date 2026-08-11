@@ -45,6 +45,7 @@ jobs:
         shell: pwsh
         run: |
           $session = Join-Path $env:RUNNER_TEMP 'codex-session.jsonl'
+          $ready = Join-Path $env:RUNNER_TEMP 'watcher-ready.txt'
           $stdout = Join-Path $env:RUNNER_TEMP 'watcher-stdout.txt'
           $stderr = Join-Path $env:RUNNER_TEMP 'watcher-stderr.txt'
 
@@ -55,12 +56,26 @@ jobs:
               '-NoProfile',
               '-File', (Resolve-Path './scripts/watch-codex-task.ps1'),
               '-SessionFile', $session,
-              '-TimeoutSeconds', '10'
+              '-TimeoutSeconds', '15',
+              '-ReadyFile', $ready
             ) `
             -RedirectStandardOutput $stdout `
             -RedirectStandardError $stderr
 
-          Start-Sleep -Milliseconds 800
+          $deadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
+          while (-not (Test-Path -LiteralPath $ready)) {
+            if ($proc.HasExited) {
+              Get-Content -LiteralPath $stderr -ErrorAction SilentlyContinue | Write-Error
+              throw "Watcher exited before readiness with $($proc.ExitCode)"
+            }
+            if ([DateTimeOffset]::UtcNow -ge $deadline) {
+              $proc.Kill()
+              throw 'Watcher did not report readiness.'
+            }
+            Start-Sleep -Milliseconds 100
+          }
+
+          # The historical completion above must not satisfy the default EOF wait.
           '{"type":"event_msg","payload":{"type":"agent_reasoning"}}' | Add-Content -LiteralPath $session -Encoding utf8
           '{"type":"event_msg","payload":{"type":"task_complete"}}' | Add-Content -LiteralPath $session -Encoding utf8
 
