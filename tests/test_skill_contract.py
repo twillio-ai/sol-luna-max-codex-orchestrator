@@ -6,52 +6,66 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SKILL = (ROOT / "skills" / "sol-luna-max-orchestrator" / "SKILL.md").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 COMMANDER = (ROOT / "examples" / "commander-prompt.md").read_text(encoding="utf-8")
+LLMS = (ROOT / "llms.txt").read_text(encoding="utf-8")
+CONTROLLER = (ROOT / "scripts" / "run_luna_cycle.py").read_text(encoding="utf-8")
 
 
 class SkillContractTests(unittest.TestCase):
     def test_executor_self_report_is_not_success(self):
-        self.assertIn("Executor completion is not success", SKILL)
-        self.assertIn("executor claim", SKILL)
-        self.assertIn("must not repeat or paraphrase an executor's success claim", SKILL)
+        self.assertIn("Executor completion is only a claim", SKILL)
+        self.assertIn("Sol must never announce success from the executor report alone", SKILL)
+        self.assertIn("Luna executor says done ≠ done", README)
 
     def test_independent_fresh_luna_review_is_mandatory(self):
-        self.assertIn("Mandatory independent Luna review gate", SKILL)
-        self.assertIn("different fresh Luna Max reviewer", SKILL)
-        self.assertIn("Never let the correction executor certify its own fix", SKILL)
+        self.assertIn("Mandatory independent review gate", SKILL)
+        self.assertIn("different fresh Luna", SKILL.lower())
+        self.assertIn("Never let the executor certify its own work", SKILL)
+        self.assertIn("Never let the fixer certify its own correction", SKILL)
 
     def test_no_success_before_pass(self):
-        self.assertIn("No premature celebration", SKILL)
-        self.assertIn("reviewer verdict is `PASS`", SKILL)
-        self.assertIn("Never convert `UNKNOWN` into success", SKILL)
+        self.assertIn("Sol cannot celebrate early", SKILL)
+        self.assertIn("only after the controller returns `PASS`", SKILL)
+        self.assertIn("downgrade an internally inconsistent `PASS` to `UNKNOWN`", SKILL)
 
-    def test_failed_review_continues_automatically(self):
+    def test_zero_intermediate_sol_wake_is_hard_contract(self):
+        self.assertIn("There is **no root-model routing wake fallback**", SKILL)
+        self.assertIn("Sol never wakes between Luna stages", SKILL)
+        self.assertIn("No Sol turn occurs at steps 2–7", SKILL)
+        self.assertIn("There is no fallback Sol routing wake", COMMANDER)
+        self.assertIn("Zero Sol routing wakes between Luna stages", README)
+        self.assertIn("There is no intermediate Sol routing-wake fallback", LLMS)
+
+    def test_heartbeat_polling_is_forbidden(self):
+        self.assertIn("No heartbeat polling by any LLM", SKILL)
+        self.assertIn("Never use recurring `wait_thread`, `wait_agent`", SKILL)
+        self.assertIn("Zero recurring Sol heartbeat turns", README)
+
+    def test_failed_review_continues_automatically_without_sol(self):
         self.assertIn("Automatic correction loop", SKILL)
-        self.assertIn("launch a fresh Luna Max correction executor automatically", SKILL)
-        self.assertIn("launch another **fresh** Luna Max reviewer", SKILL)
-
-    def test_root_does_not_heartbeat_poll(self):
-        self.assertIn("No root-model heartbeat polling", SKILL)
-        self.assertIn("Sol should wake only when semantic judgment is required, not on a timer", SKILL)
-        self.assertIn("This is a routing wake, not a deep-review turn", SKILL)
+        self.assertIn("The user is never asked to manage that loop", SKILL)
+        self.assertIn("Sol is never awakened to route that loop", SKILL)
+        self.assertIn("Never wake Sol to route this loop", COMMANDER)
 
     def test_user_never_manages_workers(self):
-        self.assertIn("The user never orchestrates workers", SKILL)
+        self.assertIn("User never orchestrates workers", SKILL)
         self.assertIn("Worker lifecycle is internal", SKILL)
-        self.assertIn("The user should never have to manually say", README)
+        self.assertIn("Do not ask me to manually open, resume, check, review, fix", COMMANDER)
 
-    def test_readme_matches_review_gate(self):
-        self.assertIn("Luna executor says done ≠ done", README)
-        self.assertIn("Mandatory independent review gate", README)
-        self.assertIn("different fresh Luna Max reviewer", README)
+    def test_controller_is_required_and_cost_bounded(self):
+        self.assertIn("scripts/run_luna_cycle.py", SKILL)
+        self.assertIn("bounded default cycle limit", SKILL.lower())
+        self.assertIn("DEFAULT_MAX_CYCLES = 3", CONTROLLER)
+        self.assertIn("agents.enabled=false", CONTROLLER)
+        self.assertIn('DEFAULT_MODEL = "gpt-5.6-luna"', CONTROLLER)
+        self.assertIn('DEFAULT_REASONING_EFFORT = "max"', CONTROLLER)
 
     def test_copy_ready_prompt_cannot_restore_old_behavior(self):
+        self.assertIn("ZERO-WAKE RULE", COMMANDER)
         self.assertIn("HARD SUCCESS RULE", COMMANDER)
-        self.assertIn("executor claim only", COMMANDER)
         self.assertIn("DIFFERENT fresh Luna Max reviewer", COMMANDER)
         self.assertIn("AUTOMATIC CORRECTION LOOP", COMMANDER)
         self.assertIn("Never let a correction executor certify its own fix", COMMANDER)
-        self.assertIn("one terminal-boundary Sol routing wake only", COMMANDER)
-        self.assertIn("Do not tell me the task is complete/fixed/deployed/verified", COMMANDER)
+        self.assertNotIn("one terminal-boundary Sol routing wake only", COMMANDER)
 
 
 if __name__ == "__main__":
