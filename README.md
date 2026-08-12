@@ -2,7 +2,7 @@
 
 [![test](https://github.com/twillio-ai/sol-luna-max-codex-orchestrator/actions/workflows/test.yml/badge.svg)](https://github.com/twillio-ai/sol-luna-max-codex-orchestrator/actions/workflows/test.yml)
 
-**Keep GPT-5.6 Sol in command. Let fresh GPT-5.6 Luna Max executors do the long work. Let the operating system wait instead of spending premium root-model turns on heartbeat polling.**
+**Keep GPT-5.6 Sol in command. Let fresh GPT-5.6 Luna Max workers execute and independently review. Let the operating system wait instead of spending premium Sol turns on heartbeat polling.**
 
 This is an independent community orchestration pattern for OpenAI Codex.
 
@@ -11,11 +11,12 @@ This is an independent community orchestration pattern for OpenAI Codex.
 
 ## The core idea
 
-Long Codex work mixes three jobs that should not be treated as the same thing:
+Long Codex work mixes four jobs that should not be treated as the same thing:
 
-1. **Judgment** — understand the goal, architecture, constraints, permissions, and proof.
+1. **Command** — understand the user goal, constraints, permissions, and acceptance criteria.
 2. **Execution** — investigate, implement, test, deploy, and correct.
-3. **Waiting** — observe executor state until something actually requires judgment again.
+3. **Independent review** — prove the executor's work instead of trusting its self-report.
+4. **Waiting** — observe worker state without spending LLM turns just to ask whether it is done.
 
 This project separates them:
 
@@ -23,68 +24,104 @@ This project separates them:
 USER
   ↓
 GPT-5.6 SOL
-commander / judgment / validation
+commander / bounded delegation
   ↓
 fresh GPT-5.6 LUNA @ MAX executor
 same authorized repository/workspace
   ↓
-WINDOWS / LOCAL PROCESS
-waits on the exact Luna session
-no LLM heartbeat
+LOCAL PROCESS / BLOCKING TRANSPORT
+waits without Sol heartbeat polling
   ↓
-task_complete
+executor terminal
   ↓
-GPT-5.6 SOL
-validate overall goal
+different fresh GPT-5.6 LUNA @ MAX reviewer
+independent inspection / proof
   ↓
-next phase needed?
-  ├─ no  → final report
-  └─ yes → fresh Luna Max executor
+reviewer verdict
+  ├─ PASS → Sol cheap final sanity gate → final report
+  ├─ FAIL → fresh Luna fixer → fresh Luna reviewer → repeat
+  ├─ UNKNOWN → resolve/review again without claiming success
+  └─ BLOCKED → ask user only if a genuinely new decision/permission is required
 ```
 
-## Executor role is not a transport
+The critical rule is simple:
 
-**Luna executor does not mean “subagent.”**
+```text
+Luna executor says done ≠ done
+```
 
-`Executor` is the logical role. The active Codex environment may expose that role through different supported transports, for example:
+Final success requires a **different fresh Luna Max reviewer** to verify the resulting workspace/state first.
+
+## Why this exists
+
+Two expensive failure modes are common in long agentic coding work:
+
+- the root model repeatedly wakes just to poll a worker that is still running;
+- the root model trusts the executor's own "done" message and reports success before anyone independently checks the result.
+
+This project rejects both patterns.
+
+Sol should spend tokens on commander-level judgment, not heartbeat waiting or duplicate deep repository review. Luna Max performs the long implementation and the independent review in separate fresh contexts.
+
+## Executor and reviewer roles are not transports
+
+`Executor` and `Reviewer` are logical roles. They are not synonyms for `subagent`.
+
+The active Codex environment may expose Luna Max through:
 
 - a fresh Codex thread/session;
 - a delegated/native worker route;
-- an isolated Codex execution route;
-- another supported route that can explicitly run `gpt-5.6-luna` at `max`.
+- `codex exec` or another isolated non-interactive route;
+- another supported mechanism that explicitly runs `gpt-5.6-luna` at `max`.
 
 No single transport is the architecture.
 
-A native subagent route is acceptable **only if it actually exposes Luna Max and preserves the required workspace/session identity**. If it rejects Luna, mark that route unsupported for the current environment and do not repeatedly retry it or silently substitute Sol/Terra.
+A route is acceptable only when it actually exposes Luna Max, preserves the authorized workspace, gives the worker a distinct identity, and has observable terminal completion.
 
-The commander should prefer a route already verified to support Luna Max. If route capability is unknown, perform one bounded capability-resolution pass, then use the valid transport for later fresh-executor rollovers without repeating model probes.
+If a route rejects Luna, mark that route unsupported. Do not repeatedly retry it and do not silently substitute Sol, Terra, or another model.
 
-## Workspace and project affinity
+## Mandatory independent review gate
 
-Fresh executor context must not mean unrelated work context.
+After every material implementation or correction phase:
 
-Preserve the exact authorized repository/workspace/folder and relevant instructions. When the active Codex transport also supports an existing project association, preserve it rather than opening an unrelated standalone executor.
+1. the implementation Luna reaches a terminal state;
+2. a **different fresh Luna Max reviewer** is launched automatically;
+3. the reviewer independently inspects the resulting repository/workspace/state;
+4. the reviewer verifies every acceptance criterion and returns one verdict:
+   - `PASS`
+   - `FAIL`
+   - `BLOCKED`
+   - `UNKNOWN`
+5. Sol may report success only after `PASS` plus a concise commander-level sanity check.
 
-The hard requirement is **correct workspace identity**. Project nesting is a useful transport capability when available, not a reason to invent or rediscover project identity that is already known.
+The reviewer should be read-only whenever practical. It may run safe deterministic verification, but it must not silently become the fixer.
 
-Do not run project discovery merely to satisfy an abstraction if the commander already has authoritative workspace/project identity.
+The implementation worker's summary is context, not proof.
 
-## Fresh executor lifecycle
+## Automatic correction loop
 
-New bounded phases should normally use fresh Luna context:
+A failed review does not return worker management to the user.
 
 ```text
-diagnosis          → fresh Luna A
-implementation     → fresh Luna B
-deployment proof   → fresh Luna C
-external proof     → fresh Luna D
+review FAIL / resolvable UNKNOWN
+→ compact failed-criteria packet
+→ fresh Luna Max correction executor
+→ local/blocking wait
+→ different fresh Luna Max reviewer
+→ repeat
 ```
 
-A long or `context_compacted` Luna session should not become a permanent container for unrelated later phases.
+The user should never have to manually say:
 
-Reuse the same Luna session only for a short direct correction to the exact same bounded phase when continuation is safe, identity is certain, context is still clean, and no new goal has been introduced.
+```text
+check Luna
+open another Luna
+review Luna
+fix what the reviewer found
+copy this back to Sol
+```
 
-Sol owns the **overall user goal**, so one Luna `task_complete` event is not automatically the end of the workflow. Sol validates the result and either finishes or rolls into the next bounded Luna phase automatically.
+From the user's point of view, it is one Sol conversation.
 
 ## No expensive heartbeat waiting
 
@@ -107,6 +144,64 @@ Luna heartbeat            → no
 
 A dependency-free Python fallback is included at `scripts/watch-codex-task.py`.
 
+When the verified transport itself blocks until completion, prefer that over polling. OpenAI's Codex non-interactive mode supports pipeline-style `codex exec`, machine-readable JSONL output, final-output files, and structured output schemas, which are useful for local orchestration without recurring root-model status turns.
+
+## Wake policy
+
+The cheapest safe path is:
+
+```text
+Sol dispatches once
+→ local/blocking execution
+→ local/blocking review
+→ Sol wakes only for reviewer PASS or a semantic blocker
+```
+
+If the active host cannot safely chain executor → reviewer without resuming the root task, one Sol resume at a terminal boundary is allowed only to route the next worker. That routing wake must not:
+
+- reread the whole repository;
+- perform implementation;
+- announce success;
+- accept the executor summary as validation.
+
+It should immediately launch the fresh reviewer and return to waiting.
+
+## Workspace and project affinity
+
+Fresh context must not mean unrelated work context.
+
+Preserve the exact authorized repository/workspace/folder and relevant instructions for every executor, reviewer, and fixer. Existing project association should be preserved when supported and already known.
+
+A fresh worker means a fresh execution context in the same authorized work scope.
+
+## Fresh worker lifecycle
+
+Fresh Luna context is the default for:
+
+```text
+diagnosis / implementation  → fresh Luna executor
+independent verification     → different fresh Luna reviewer
+failed review correction     → fresh Luna fixer
+post-correction verification → different fresh Luna reviewer
+```
+
+The mandatory reviewer is never the same Luna session that produced the change it reviews.
+
+## Sol's final sanity gate
+
+Sol remains the commander, but it should not duplicate the expensive deep review that Luna already performed.
+
+After reviewer `PASS`, Sol checks only that:
+
+- reviewer identity differs from executor identity;
+- the verdict is `PASS`;
+- every material acceptance criterion has evidence;
+- there is no unresolved blocker, unknown state, severe finding, or unverified external condition.
+
+Then Sol reports the result to the user.
+
+If evidence is incomplete, Sol launches another fresh Luna review instead of celebrating early.
+
 ## Trace-first external canaries
 
 When a live canary crosses many layers, do not immediately patch the first defect and resend.
@@ -126,46 +221,52 @@ ONE live canary
 
 This maximizes evidence per external side effect and avoids one-canary-per-defect loops.
 
+## What the skill enforces
+
+- Sol remains the single user-facing commander.
+- Luna Max performs implementation-heavy work.
+- A different fresh Luna Max reviewer is mandatory before final success.
+- Executor self-report is never accepted as proof.
+- No premature success language before reviewer `PASS`.
+- Failed review automatically produces a fresh correction worker and another fresh review.
+- Sol and Luna workers are distinct execution contexts.
+- The Luna roles are transport-agnostic; subagents are optional, not canonical.
+- No silent fallback to Sol, Terra, or another executor when Luna is required.
+- Exact repository/workspace identity is preserved.
+- No recurring Sol heartbeat/status loops.
+- Local process waiting does not invoke a model.
+- The user never manually manages worker sessions.
+
 ## Quick start
 
 1. Read [`skills/sol-luna-max-orchestrator/SKILL.md`](skills/sol-luna-max-orchestrator/SKILL.md).
 2. Adapt [`examples/commander-prompt.md`](examples/commander-prompt.md).
 3. Preserve the real repository/workspace, permissions, and production gates.
-4. Route Luna through a transport that explicitly supports Luna Max; do not assume a subagent API is required.
-5. Attach the local watcher only to the exact Luna executor session.
-
-## What the skill enforces
-
-- Sol remains the single user-facing commander.
-- Luna Max performs implementation-heavy phases.
-- Sol and Luna are distinct execution contexts.
-- The Luna **role is transport-agnostic**; subagent is optional, not canonical.
-- No silent fallback to Sol, Terra, or another executor when Luna is required.
-- Exact repository/workspace identity is preserved.
-- Existing project association is preserved when supported and already known.
-- New bounded phases use fresh Luna context by default.
-- No recurring Sol `wait_thread` / `wait_agent` heartbeat loops.
-- Local process waiting does not invoke a model.
-- Sol validates the overall goal and continues automatically when more work remains.
-- Trace-first canaries favor one diagnostic attempt, a defect ledger, repair, then one proof attempt.
+4. Route Luna through a transport that explicitly supports Luna Max.
+5. Attach local/blocking completion observation only to the exact active Luna worker.
+6. Never finish after executor completion alone; run the mandatory fresh Luna review gate.
 
 ## FAQ
 
 ### Does this require Codex subagents?
 
-No. A subagent interface is only one possible executor transport. Use whichever supported Codex route can explicitly run Luna Max with the correct workspace and observable session identity.
+No. Subagent is only one possible transport. The executor/reviewer architecture is independent of the mechanism used to launch Luna Max.
 
-### What if a native worker route says `Unknown model gpt-5.6-luna`?
+### What if a worker route says `Unknown model gpt-5.6-luna`?
 
-Treat that **route** as unsupported for Luna in the current environment. Do not silently substitute another model and do not keep retrying the same route. If another supported Codex transport explicitly exposes Luna Max, use it; otherwise fail clearly.
+Treat that route as unsupported for Luna in the current environment. Do not keep retrying it and do not silently substitute another model. If another supported Codex transport exposes Luna Max, use it; otherwise fail clearly.
 
-### Should every phase reuse the same Luna chat?
+### Why use another Luna to review instead of Sol doing the deep review?
 
-Usually no. Fresh bounded phases should normally get fresh Luna context. Same-session reuse is reserved for narrow direct correction.
+Sol remains responsible for the decision, but Luna Max can do the expensive repository inspection and test verification in a fresh independent context. Sol receives a compact verdict/evidence packet and performs the final commander-level sanity gate.
 
-### Does Sol stay in control while Windows waits?
+### Can the executor review its own work?
 
-Yes. Authority and compute activity are different. The watcher only observes terminal executor state; Sol still owns the goal, validation, correction decisions, and final answer.
+No. Its own tests and summary are useful evidence, but the mandatory independent review must come from a different fresh Luna Max context.
+
+### Does Sol stay in control while the OS waits?
+
+Yes. Authority and compute activity are different. Sol owns the goal; the local wait layer simply avoids spending inference turns on mechanical waiting.
 
 ### Is this an official OpenAI optimization?
 
@@ -176,6 +277,7 @@ No. It is an independent community pattern built around public OpenAI Codex and 
 - GPT-5.6 Sol: https://developers.openai.com/api/docs/models/gpt-5.6-sol
 - GPT-5.6 Luna: https://developers.openai.com/api/docs/models/gpt-5.6-luna
 - GPT-5.6 guidance: https://developers.openai.com/api/docs/guides/latest-model
+- Codex non-interactive mode: https://developers.openai.com/codex/noninteractive
 - Codex: https://developers.openai.com/codex/
 
 ## Attribution
@@ -190,4 +292,4 @@ MIT. See [`LICENSE`](LICENSE).
 
 ---
 
-**Stop paying your smartest model to wait. Keep Sol in command, route Luna Max through the transport that actually supports it, and let the operating system watch the task.**
+**Stop paying your smartest model to wait or duplicate deep review. Sol commands; fresh Luna Max executes; a different fresh Luna Max proves; Sol reports only after proof.**
