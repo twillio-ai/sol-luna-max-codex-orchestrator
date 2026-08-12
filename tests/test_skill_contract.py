@@ -5,6 +5,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SKILL = (ROOT / "skills" / "sol-luna-max-orchestrator" / "SKILL.md").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
+COMMANDER = (ROOT / "examples" / "commander-prompt.md").read_text(encoding="utf-8")
 
 
 class SkillContractTests(unittest.TestCase):
@@ -42,6 +43,15 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("Luna executor says done ≠ done", README)
         self.assertIn("Mandatory independent review gate", README)
         self.assertIn("different fresh Luna Max reviewer", README)
+
+    def test_copy_ready_prompt_cannot_restore_old_behavior(self):
+        self.assertIn("HARD SUCCESS RULE", COMMANDER)
+        self.assertIn("executor claim only", COMMANDER)
+        self.assertIn("DIFFERENT fresh Luna Max reviewer", COMMANDER)
+        self.assertIn("AUTOMATIC CORRECTION LOOP", COMMANDER)
+        self.assertIn("Never let a correction executor certify its own fix", COMMANDER)
+        self.assertIn("one terminal-boundary Sol routing wake only", COMMANDER)
+        self.assertIn("Do not tell me the task is complete/fixed/deployed/verified", COMMANDER)
 
 
 if __name__ == "__main__":
