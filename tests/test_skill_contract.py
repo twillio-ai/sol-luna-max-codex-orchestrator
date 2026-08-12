@@ -18,7 +18,7 @@ class SkillContractTests(unittest.TestCase):
 
     def test_independent_fresh_luna_review_is_mandatory(self):
         self.assertIn("Mandatory independent review gate", SKILL)
-        self.assertIn("different fresh Luna", SKILL.lower())
+        self.assertIn("different fresh luna", SKILL.lower())
         self.assertIn("Never let the executor certify its own work", SKILL)
         self.assertIn("Never let the fixer certify its own correction", SKILL)
 
@@ -64,7 +64,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("HARD SUCCESS RULE", COMMANDER)
         self.assertIn("DIFFERENT fresh Luna Max reviewer", COMMANDER)
         self.assertIn("AUTOMATIC CORRECTION LOOP", COMMANDER)
-        self.assertIn("Never let a correction executor certify its own fix", COMMANDER)
+        self.assertIn("A correction executor must never certify its own correction", COMMANDER)
         self.assertNotIn("one terminal-boundary Sol routing wake only", COMMANDER)
 
 
