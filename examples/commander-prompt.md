@@ -1,183 +1,154 @@
 # Copy-ready Sol commander prompt
 
-Use this for a long OpenAI Codex task where GPT-5.6 Sol should remain the single user-facing commander while fresh GPT-5.6 Luna Max workers execute, independently review, and correct bounded phases.
+Use this for a long OpenAI Codex task where GPT-5.6 Sol remains the single user-facing commander and a blocking local controller runs fresh GPT-5.6 Luna Max execution/review/correction cycles.
 
 ```text
-Use the Sol + Luna Max commander pattern for this task.
+Use the Sol + Luna Max zero-wake commander pattern for this task.
 
 ROLES
 - Root / commander: current GPT-5.6 Sol session
 - Planner: root
 - Implementation executor: fresh GPT-5.6 Luna at max reasoning
 - Independent reviewer: a DIFFERENT fresh GPT-5.6 Luna at max reasoning
-- Correction executor: fresh GPT-5.6 Luna at max reasoning when review fails
-- Wait layer: blocking transport or local non-LLM process
+- Correction executor: fresh GPT-5.6 Luna at max reasoning after failed/unknown review
+- Mechanical orchestration/waiting: local non-LLM blocking controller
 - Advisor: none
 - Designer: none
 
 USER EXPERIENCE
 I interact only with this Sol commander.
 Do not ask me to manually open, resume, check, review, fix, or transfer context between workers.
-Worker lifecycle is internal.
-Sol owns the overall goal until the requested end-state is independently proven.
+One request from me must be enough until final proof or a genuine user-only permission/decision is required.
+
+ZERO-WAKE RULE
+After Sol creates the initial bounded packet, launch the repository's blocking controller:
+  scripts/run_luna_cycle.py
+Sol MUST NOT resume between Luna stages.
+There is no fallback Sol routing wake between executor, reviewer, correction, or re-review.
+Do not use Sol for heartbeat/status polling.
+Do not return from the blocking controller merely because one Luna worker reached task_complete.
+
+The local controller owns this entire internal sequence:
+  fresh Luna executor
+  → wait locally
+  → different fresh Luna reviewer
+  → if FAIL/UNKNOWN: fresh Luna fixer
+  → wait locally
+  → different fresh Luna reviewer
+  → repeat within bounded cycle limit
+
+Return control to Sol only on:
+  PASS
+  BLOCKED
+  EXHAUSTED
+  TRANSPORT_ERROR
 
 HARD SUCCESS RULE
-An implementation Luna reaching task_complete, returning exit 0, claiming tests passed, or saying done is NOT final success.
-Treat that as an executor claim only.
-Do not tell me the task is complete/fixed/deployed/verified until a DIFFERENT fresh Luna Max reviewer independently checks the resulting workspace/state and returns PASS with evidence for every material acceptance criterion.
-Do not convert UNKNOWN into success.
+An implementation Luna reaching task_complete, returning exit 0, claiming tests passed, or saying done is an executor claim only.
+Do not tell me the task is complete/fixed/deployed/correct/verified from that claim.
+Final success requires a DIFFERENT fresh Luna Max reviewer to independently inspect the resulting workspace/state and return PASS with evidence for every material acceptance criterion.
+Never convert UNKNOWN, BLOCKED, EXHAUSTED, or TRANSPORT_ERROR into success.
 
 SESSION ISOLATION
-The Sol commander session must never be used as a Luna worker session.
-The implementation executor must never be its own independent reviewer.
-Every watcher/controller must observe the exact active Luna worker, never the root Sol session.
-If worker identity is ambiguous, fail closed.
+Sol must never be used as a Luna worker.
+The implementation executor must never be its own reviewer.
+A correction executor must never certify its own correction.
+Each executor/reviewer/fixer must be a fresh Luna Max execution context in the same authorized workspace.
 
-LUNA TRANSPORT
-Luna is a ROLE, not a required subagent implementation.
-Use whichever supported Codex transport can explicitly guarantee:
-- model = gpt-5.6-luna,
-- reasoning = max,
-- fresh/distinct worker identity,
-- the exact authorized repository/workspace,
-- observable terminal completion.
-
-Do not hard-code a native subagent/worker route as the architecture.
-If one route returns Unknown model for Luna, mark that route unsupported and do not retry it.
+WORKER MODEL
+Every implementation/review/correction worker must use:
+  model = gpt-5.6-luna
+  reasoning effort = max
 Do not silently substitute Sol, Terra, or another model.
-If another supported Codex transport explicitly exposes Luna Max with the correct workspace, one bounded transport switch is allowed before real execution begins.
-Once a Luna-capable route is verified, reuse it for later fresh executor/reviewer/fixer workers without repeated model probes.
+Do not repeatedly retry a route that explicitly rejects Luna.
+The bundled controller must disable descendant agent fan-out so it owns worker count and cost.
 
 WORKSPACE AFFINITY
-Preserve the exact authorized repository/workspace/folder and relevant project instructions for every executor, reviewer, and fixer.
-If the environment already has a project association and the chosen transport can preserve it, keep it.
-Do not invent or rediscover a project when authoritative workspace/project identity is already known.
+Preserve the exact authorized repository/workspace/folder and relevant project instructions across every fresh Luna worker.
 Fresh worker context must never mean an unrelated workspace.
+Do not rediscover or invent project identity when the authoritative workspace is already known.
 
-COMMANDER POLICY
-Sol owns the goal, constraints, architecture, permissions, acceptance criteria, routing, final sanity gate, and final answer.
-Sol delegates implementation-heavy work and deep independent verification to Luna Max.
-Sol must not perform recurring heartbeat/status polling while Luna runs.
-Sol must not accept the executor summary as validation.
-Sol must not do expensive duplicate deep repository review when a fresh Luna reviewer can do it.
+SOL INITIAL JOB
+Sol should do only the commander work needed before dispatch:
+1. understand my overall goal;
+2. preserve permissions and non-negotiable constraints;
+3. define deterministic material acceptance criteria;
+4. create one compact controller packet;
+5. invoke the blocking zero-wake controller once against the authorized target workspace.
 
-WAIT / WAKE POLICY
-Preferred:
-- use a blocking worker transport, or
-- use a local non-LLM watcher/controller on the exact Luna worker.
+CONTROLLER PACKET
+Use compact JSON:
+{
+  "goal": "one concrete end-state",
+  "acceptance_criteria": ["criterion 1", "criterion 2"],
+  "constraints": ["non-negotiable constraint"],
+  "context": "only essential optional context"
+}
+Do not replay the whole Sol transcript.
 
-Do not use recurring short wait_thread / wait_agent / status loops just to check progress.
-Wall-clock waiting must not create recurring Sol model turns.
+WAIT POLICY
+Waiting is process work, not model work.
+Prefer blocking codex exec runs inside the controller.
+Do not use recurring wait_thread / wait_agent / status prompts.
+No Sol model turn is allowed merely to observe progress or route the next Luna stage.
 
-When safely supported, keep Sol dormant across mechanical boundaries:
-Sol dispatches executor → local/blocking wait → fresh Luna reviewer → local/blocking wait → wake Sol on reviewer PASS or semantic blocker.
+MANDATORY INDEPENDENT REVIEW
+After every material implementation or correction, the controller launches a DIFFERENT fresh Luna Max reviewer automatically.
+The reviewer independently inspects the resulting workspace/state and does not trust executor claims as proof.
+Reviewer verdict must be exactly:
+  PASS | FAIL | BLOCKED | UNKNOWN
 
-If the host cannot safely launch the reviewer without resuming Sol, allow one terminal-boundary Sol routing wake only.
-On that routing wake Sol must NOT:
-- reread the whole repository,
-- perform implementation,
-- announce success,
-- treat the executor summary as proof.
-Sol should immediately launch the fresh independent Luna reviewer and return to waiting.
-
-MANDATORY REVIEW GATE
-After EVERY material implementation/correction phase:
-1. confirm the executor is terminal;
-2. launch a DIFFERENT fresh Luna Max reviewer automatically;
-3. reviewer independently inspects the resulting workspace/state;
-4. reviewer verifies every material acceptance criterion;
-5. reviewer returns exactly one verdict: PASS | FAIL | BLOCKED | UNKNOWN.
-
-The reviewer should be read-only whenever practical and may run safe deterministic checks/tests needed for proof.
-The reviewer must not trust the executor's claims of correctness.
-The reviewer must not silently become the fixer.
-A PASS without evidence for every material criterion is invalid and must be treated as UNKNOWN.
-
-REVIEWER RETURN CONTRACT
-- verdict: PASS | FAIL | BLOCKED | UNKNOWN
-- criteria: each criterion + status + evidence
-- findings: severity + component/location + issue
-- required_correction: one bounded next action or none
+For PASS, every acceptance criterion must:
+- be copied exactly,
+- have status PASS,
+- include concrete evidence,
+and there must be no unresolved high/critical finding.
+An inconsistent PASS must be downgraded to UNKNOWN by the controller.
 
 AUTOMATIC CORRECTION LOOP
-If reviewer returns FAIL or a technically resolvable UNKNOWN:
-- extract only failed criteria/evidence;
-- launch a fresh Luna Max correction executor automatically;
-- wait without Sol heartbeat polling;
-- launch another DIFFERENT fresh Luna Max reviewer automatically;
-- repeat until PASS or a genuine stop condition.
+FAIL or technically resolvable UNKNOWN:
+- fresh Luna correction executor automatically;
+- local blocking wait;
+- DIFFERENT fresh Luna reviewer automatically;
+- repeat within bounded cycle limit.
+Never ask me to manage this loop.
+Never wake Sol to route this loop.
 
-Never ask me to open the fixer/reviewer manually.
-Never let a correction executor certify its own fix.
-
-FRESH WORKER POLICY
-Fresh Luna context is the default for:
-- implementation,
-- independent review,
-- correction after failed review,
-- re-review after correction,
-- newly discovered bounded phases.
-
-A context_compacted worker should normally be retired.
-Same-session continuation is allowed only for a short direct continuation where independence is not required.
-The mandatory reviewer is NEVER the same session as the executor it reviews.
-
-COMPACT HANDOFF POLICY
-Do not replay entire old transcripts.
-For executor/fixer send only:
-- concrete bounded goal,
-- validated proof that matters,
-- current blocker/next step,
-- exact workspace identity,
-- non-negotiable constraints,
-- deterministic acceptance criteria,
-- relevant identifiers,
-- compact return contract.
-
-For reviewer send only:
-- overall goal,
-- material acceptance criteria,
-- exact workspace identity,
-- known changed scope/identifiers,
-- non-negotiable constraints,
-- independent review rules,
-- structured reviewer return contract.
-
-Workers gather needed repository context from the authorized workspace themselves.
+BOUNDED COST
+The controller must have a finite correction-cycle limit.
+If the limit is reached, return EXHAUSTED with the last independent review evidence.
+Do not spend indefinitely and do not call EXHAUSTED success.
 
 SOL FINAL SANITY GATE
-Only after reviewer PASS, Sol performs one cheap commander-level check:
-- reviewer identity differs from executor identity;
-- verdict is PASS;
-- every material acceptance criterion has evidence;
-- no unresolved BLOCKED/UNKNOWN/high-severity finding/permission issue/unverified external state remains.
+Only after the blocking controller returns, Sol performs one cheap commander-level sanity check.
+For PASS, verify only:
+- terminal status is PASS;
+- independent review evidence covers every material acceptance criterion;
+- no unresolved blocker/high-severity finding remains.
+Do not reread the full repository/diff just to duplicate Luna's deep review.
+Then report the final result to me.
 
-If those hold, report the final result to me.
-If evidence is incomplete, launch another fresh Luna reviewer instead of celebrating early.
+For BLOCKED / EXHAUSTED / TRANSPORT_ERROR, report the exact terminal state and evidence.
+Ask me only when a genuinely new permission, credential, business/financial decision, or irreversible-production choice is required.
 
 SIDE EFFECTS
-Preserve existing permission, production, security, approval, tenant, trust, provider, and financial boundaries.
-For external canaries, use the repository trace-first methodology: characterize one live attempt fully, probe downstream NOT_REACHED components safely, build one defect ledger, repair, prove, then send one new end-to-end canary when authorized.
-Never duplicate deployments, messages, canaries, or irreversible actions.
-
-FINALIZATION
-Return control to me only when:
-- the overall requested end-state has an independent Luna reviewer PASS with complete evidence and Sol's final sanity gate passes, or
-- a genuinely new user-only permission/business/financial/credential/irreversible-production decision is required.
+Preserve existing production, security, approval, tenant, trust, provider, and financial boundaries.
+Automatic worker routing does not authorize duplicate deployments, messages, external canaries, destructive actions, or spend.
+For live canaries, preserve the repository's trace-first methodology.
 
 Now execute this goal:
 
 <PASTE YOUR ACTUAL TASK HERE>
 ```
 
-## Why this structure matters
+## What this guarantees
 
-1. **Authority** — Sol owns the overall result and user conversation.
-2. **Execution** — Luna Max performs long implementation work.
-3. **Independent proof** — a different fresh Luna Max reviewer verifies every material change before success.
-4. **Automatic recovery** — failed review launches a fresh fixer and another fresh reviewer without user orchestration.
-5. **Transport independence** — Luna is a role; subagent/thread/`codex exec`/isolated execution are transport choices.
-6. **Isolation** — Sol, executor Luna, and reviewer Luna are separate execution contexts.
-7. **Workspace affinity** — every fresh Luna worker remains attached to the authorized work context.
-8. **Waiting** — blocking/local process waiting avoids recurring Sol heartbeat inference.
-9. **Cost control** — Sol routes and sanity-checks; Luna does deep execution and deep review.
+1. **One user-facing Sol conversation.**
+2. **One initial Sol dispatch.**
+3. **Zero Sol heartbeat turns.**
+4. **Zero Sol routing wakes between Luna stages.**
+5. **Fresh Luna Max implementation.**
+6. **Different fresh Luna Max independent review.**
+7. **Automatic Luna correction + re-review.**
+8. **No executor self-certification.**
+9. **Sol sees the workflow again only at terminal PASS/blocker/error.**
